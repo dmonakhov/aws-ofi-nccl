@@ -890,6 +890,44 @@ static ncclResult_t create_groups_from_info_lists(nccl_ofi_topo_t *topo)
 	return ncclSuccess;
 }
 
+/* Dirty hack which limit number of NICs in each group to certain limit from ENV NCCL_OFI_GROUP_LIMIT */
+static void reduce_nic_groups(nccl_ofi_topo_t *topo) {
+	nccl_ofi_topo_data_t *data = NULL;
+	nccl_ofi_topo_data_iterator_t data_iter;
+	nccl_ofi_topo_set_to_begin(topo, &data_iter);
+
+	const char *grp_str = getenv("NCCL_OFI_GROUP_LIMIT");
+	int group_sz_limit = grp_str ? atoi(grp_str) :0;
+
+	if (!group_sz_limit)
+		return;
+
+	topo->max_group_size = 0;
+
+	while ((data = nccl_ofi_get_user_data(&data_iter))) {
+		nccl_ofi_inc_user_data_iter(&data_iter);
+		if (!data->info_list) {
+			continue;
+		}
+
+		struct fi_info *info = data->info_list;
+		int info_idx = 0;
+		while (info) {
+			if (info_idx == group_sz_limit -1)
+				break;
+			++info_idx;
+			info = info->next;
+
+		}
+		if (data->info_list_len > group_sz_limit) {
+			info->next = NULL;
+			data->info_list_len = group_sz_limit;
+		}
+		topo->max_group_size = nccl_ofi_max_int(topo->max_group_size, data->info_list_len);
+	}
+}
+
+
 /*
  * @brief	Print libfabric NIC info lists stored in user data of topology nodes
  */
@@ -948,7 +986,7 @@ ncclResult_t nccl_ofi_topo_group(nccl_ofi_topo_t *topo)
 	if (ret != ncclSuccess) {
 		return ret;
 	}
-
+	reduce_nic_groups(topo);
 	print_nic_groups(topo);
 	return ret;
 }
